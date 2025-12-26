@@ -1,18 +1,113 @@
 import { appWindow } from "@tauri-apps/api/window"
 import { listen } from "@tauri-apps/api/event"
-import { useState, useEffect } from "react"
+import { useEffect, useRef, useState } from "react"
 import { motion } from "motion/react"
 
 function App() {
   const [isListening, setIsListening] = useState(false)
   const [isVisible, setIsVisible] = useState(false)
 
-  // Smooth entrance animation
-  useEffect(() => {
-    setTimeout(() => setIsVisible(true), 100)
-  }, [])
+  // refs for audio + socket
+  const socketRef = useRef<WebSocket | null>(null)
+  const audioContextRef = useRef<AudioContext | null>(null)
+  const processorRef = useRef<ScriptProcessorNode | null>(null)
+  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
 
-  // 🔗 Listen to Rust global "L" shortcut
+  /* -----------------------------
+     Float32 → Int16 PCM
+  ------------------------------ */
+  const floatTo16BitPCM = (input: Float32Array) => {
+    const buffer = new ArrayBuffer(input.length * 2)
+    const view = new DataView(buffer)
+
+    let offset = 0
+    for (let i = 0; i < input.length; i++, offset += 2) {
+      let sample = Math.max(-1, Math.min(1, input[i]))
+      view.setInt16(
+        offset,
+        sample < 0 ? sample * 0x8000 : sample * 0x7fff,
+        true
+      )
+    }
+
+    return buffer
+  }
+
+  /* -----------------------------
+     Start microphone (PCM)
+  ------------------------------ */
+  const startMic = async () => {
+    // WebSocket
+    const socket = new WebSocket("ws://localhost:3000/audio")
+    socket.binaryType = "arraybuffer"
+    socketRef.current = socket
+
+    // Mic
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    streamRef.current = stream
+
+    // AudioContext (match Deepgram)
+    const audioContext = new AudioContext({ sampleRate: 16000 })
+    audioContextRef.current = audioContext
+
+    const source = audioContext.createMediaStreamSource(stream)
+    sourceRef.current = source
+
+    const processor = audioContext.createScriptProcessor(4096, 1, 1)
+    processorRef.current = processor
+
+    processor.onaudioprocess = e => {
+      if (socket.readyState !== WebSocket.OPEN) return
+
+      const input = e.inputBuffer.getChannelData(0)
+      const pcm16 = floatTo16BitPCM(input)
+
+      socket.send(pcm16)
+    }
+
+    source.connect(processor)
+    processor.connect(audioContext.destination)
+  }
+
+  /* -----------------------------
+     Stop microphone
+  ------------------------------ */
+  const stopMic = async () => {
+    processorRef.current?.disconnect()
+    sourceRef.current?.disconnect()
+
+    await audioContextRef.current?.close()
+
+    streamRef.current?.getTracks().forEach(t => t.stop())
+    socketRef.current?.close()
+
+    processorRef.current = null
+    sourceRef.current = null
+    audioContextRef.current = null
+    streamRef.current = null
+    socketRef.current = null
+  }
+
+  /* -----------------------------
+     Toggle listening
+  ------------------------------ */
+  useEffect(() => {
+    if (isListening) {
+      startMic()
+    } else {
+      stopMic()
+    }
+
+    return () => {
+      stopMic()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isListening])
+
+  /* -----------------------------
+     Tauri shortcut listener
+  ------------------------------ */
   useEffect(() => {
     const unlistenPromise = listen("toggle-listening", () => {
       setIsListening(prev => !prev)
@@ -23,17 +118,20 @@ function App() {
     }
   }, [])
 
-  // Allow dragging the floating window
+  /* -----------------------------
+     Entrance animation
+  ------------------------------ */
+  useEffect(() => {
+    setTimeout(() => setIsVisible(true), 100)
+  }, [])
+
   const handleMouseDown = async () => {
     await appWindow.startDragging()
   }
 
-  // Toggle on click as well
-  const toggleListening = () => {
-    setIsListening(prev => !prev)
-  }
-
-  // Sound wave bars configuration
+  /* -----------------------------
+     UI
+  ------------------------------ */
   const bars = [
     { idle: 10, active: 24, delay: 0 },
     { idle: 14, active: 32, delay: 0.1 },
@@ -47,7 +145,7 @@ function App() {
     <div className="flex items-center justify-center h-screen w-screen bg-transparent">
       <div
         onMouseDown={handleMouseDown}
-        onClick={toggleListening}
+        onClick={() => setIsListening(p => !p)}
         className={`
           flex items-center gap-4
           bg-[#1a1a1a] border-2 border-white
@@ -58,12 +156,11 @@ function App() {
           ${isListening ? "scale-105" : ""}
         `}
       >
-        {/* 🔊 Sound wave animation */}
         <div className="flex items-center gap-1">
           {bars.map((bar, i) => (
             <motion.div
-              key={`${isListening}-${i}`} // ⬅️ forces stop/start cleanly
-              className="w-[3px] bg-white rounded-sm"
+              key={`${isListening}-${i}`}
+              className="w-0.75 bg-white rounded-sm"
               animate={{
                 height: isListening
                   ? [bar.idle, bar.active, bar.idle]
@@ -71,7 +168,7 @@ function App() {
               }}
               transition={{
                 duration: isListening ? 0.8 : 0.25,
-                repeat: isListening ? Infinity : 0,
+                repeat: isListening ? Infinity : 1,
                 ease: "easeInOut",
                 delay: bar.delay,
               }}
@@ -79,8 +176,7 @@ function App() {
           ))}
         </div>
 
-        {/* Text */}
-        <div className="text-white text-xl font-semibold select-none transition-all duration-300">
+        <div className="text-white text-xl font-semibold select-none">
           {isListening ? "listening..." : "hello"}
         </div>
       </div>

@@ -13,7 +13,7 @@
   "tauri": {
     "allowlist": {
       "all": false,
-     "window": {
+      "window": {
         "all": false,
         "startDragging": true
       },
@@ -23,7 +23,7 @@
       }
     },
     "windows": [
-       {
+      {
         "title": "Subspace Intern",
         "width": 300,
         "height": 80,
@@ -31,11 +31,11 @@
         "transparent": true,
         "alwaysOnTop": true,
         "resizable": false,
-        "center": true,
+         "x": 600,
+         "y": 720,
         "skipTaskbar": true
       }
-    ]
-,
+    ],
     "security": {
       "csp": null
     },
