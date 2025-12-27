@@ -1,53 +1,84 @@
 import { appWindow } from "@tauri-apps/api/window"
 import { listen } from "@tauri-apps/api/event"
+import { invoke } from "@tauri-apps/api/tauri"
 import { useEffect, useRef, useState } from "react"
 import { motion } from "motion/react"
 
 function App() {
   const [isListening, setIsListening] = useState(false)
   const [isVisible, setIsVisible] = useState(false)
+  const [isAnimating, setIsAnimating] = useState(false)
+  const [isHovered, setIsHovered] = useState(false)
+  const [isAudioActive, setIsAudioActive] = useState(false)
 
-  // refs for audio + socket
   const socketRef = useRef<WebSocket | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
   const processorRef = useRef<ScriptProcessorNode | null>(null)
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
 
+  const audioActiveRef = useRef(false)
+
   /* -----------------------------
-     Float32 → Int16 PCM
+     Float32 → Int16
   ------------------------------ */
-  const floatTo16BitPCM = (input: Float32Array) => {
+  const float32ToInt16 = (input: Float32Array) => {
     const buffer = new ArrayBuffer(input.length * 2)
     const view = new DataView(buffer)
 
     let offset = 0
     for (let i = 0; i < input.length; i++, offset += 2) {
-      let sample = Math.max(-1, Math.min(1, input[i]))
-      view.setInt16(
-        offset,
-        sample < 0 ? sample * 0x8000 : sample * 0x7fff,
-        true
-      )
+      const sample = Math.max(-1, Math.min(1, input[i]))
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true)
     }
-
     return buffer
   }
 
   /* -----------------------------
-     Start microphone (PCM)
+     Typing via Enigo
+  ------------------------------ */
+  const typeText = async (text: string) => {
+    if (!text.trim()) return
+    console.log("⌨️ Typing:", text)
+    await invoke("type_text", { text })
+  }
+
+  /* -----------------------------
+     Start mic
   ------------------------------ */
   const startMic = async () => {
-    // WebSocket
+    console.log("🎤 Starting mic")
+
+    audioActiveRef.current = false
+    setIsAudioActive(false)
+
     const socket = new WebSocket("ws://localhost:3000/audio")
     socket.binaryType = "arraybuffer"
     socketRef.current = socket
 
-    // Mic
+    socket.onmessage = async (e) => {
+      const msg = JSON.parse(e.data)
+      if (msg.is_final && msg.text) {
+        console.log("✅ Final transcript:", msg.text)
+        await typeText(msg.text + " ")
+      }
+    }
+
+    await new Promise<void>((res) => {
+      socket.onopen = () => {
+        console.log("✅ WebSocket connected")
+        res()
+      }
+    })
+
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
     streamRef.current = stream
+    console.log(stream)
 
-    // AudioContext (match Deepgram)
+    if(stream){
+      setIsAnimating(true)
+    }
+
     const audioContext = new AudioContext({ sampleRate: 16000 })
     audioContextRef.current = audioContext
 
@@ -57,29 +88,43 @@ function App() {
     const processor = audioContext.createScriptProcessor(4096, 1, 1)
     processorRef.current = processor
 
-    processor.onaudioprocess = e => {
+    const silent = audioContext.createGain()
+    silent.gain.value = 0
+
+    processor.onaudioprocess = (e) => {
       if (socket.readyState !== WebSocket.OPEN) return
 
-      const input = e.inputBuffer.getChannelData(0)
-      const pcm16 = floatTo16BitPCM(input)
+      const pcm = float32ToInt16(e.inputBuffer.getChannelData(0))
+      socket.send(pcm)
 
-      socket.send(pcm16)
+      // 🔥 audio is flowing
+      if (!audioActiveRef.current) {
+        audioActiveRef.current = true
+        setIsAudioActive(true)
+      }
     }
 
     source.connect(processor)
-    processor.connect(audioContext.destination)
+    processor.connect(silent)
+    silent.connect(audioContext.destination)
+
+    console.log("✅ Audio pipeline active")
   }
 
   /* -----------------------------
-     Stop microphone
+     Stop mic
   ------------------------------ */
   const stopMic = async () => {
+    console.log("🛑 Stopping mic")
+
+    audioActiveRef.current = false
+    setIsAudioActive(false)
+
     processorRef.current?.disconnect()
     sourceRef.current?.disconnect()
+    streamRef.current?.getTracks().forEach(t => t.stop())
 
     await audioContextRef.current?.close()
-
-    streamRef.current?.getTracks().forEach(t => t.stop())
     socketRef.current?.close()
 
     processorRef.current = null
@@ -90,7 +135,7 @@ function App() {
   }
 
   /* -----------------------------
-     Toggle listening
+     Listening toggle
   ------------------------------ */
   useEffect(() => {
     if (isListening) {
@@ -98,23 +143,18 @@ function App() {
     } else {
       stopMic()
     }
-
-    return () => {
-      stopMic()
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isListening])
 
   /* -----------------------------
-     Tauri shortcut listener
+     Global shortcut
   ------------------------------ */
   useEffect(() => {
-    const unlistenPromise = listen("toggle-listening", () => {
-      setIsListening(prev => !prev)
+    const unlisten = listen("toggle-listening", () => {
+      console.log("🎯 Toggle listening")
+      setIsListening(p => !p)
     })
-
     return () => {
-      unlistenPromise.then(unlisten => unlisten())
+      unlisten.then(f => f())
     }
   }, [])
 
@@ -127,6 +167,15 @@ function App() {
 
   const handleMouseDown = async () => {
     await appWindow.startDragging()
+  }
+
+  /* -----------------------------
+     Scale priority logic
+  ------------------------------ */
+  const getScale = () => {
+    if (isAnimating) return 1.08
+    if (isListening || isAudioActive || isHovered) return 1.05
+    return 1
   }
 
   /* -----------------------------
@@ -143,32 +192,38 @@ function App() {
 
   return (
     <div className="flex items-center justify-center h-screen w-screen bg-transparent">
-      <div
+      <motion.div
         onMouseDown={handleMouseDown}
-        onClick={() => setIsListening(p => !p)}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+        animate={{ scale: getScale() }}
+        transition={{
+          type: "spring",
+          stiffness: 300,
+          damping: 20
+        }}
         className={`
           flex items-center gap-4
           bg-[#1a1a1a] border-2 border-white
           rounded-[50px] px-8 py-4
           cursor-move select-none
-          transition-all duration-500 ease-out
-          ${isVisible ? "opacity-100 scale-100" : "opacity-0 scale-90"}
-          ${isListening ? "scale-105" : ""}
+          transition-opacity duration-500 ease-out
+          ${isVisible ? "opacity-100" : "opacity-0"}
         `}
       >
         <div className="flex items-center gap-1">
           {bars.map((bar, i) => (
             <motion.div
-              key={`${isListening}-${i}`}
+              key={i}
               className="w-0.75 bg-white rounded-sm"
               animate={{
-                height: isListening
+                height: isAnimating
                   ? [bar.idle, bar.active, bar.idle]
                   : bar.idle,
               }}
               transition={{
-                duration: isListening ? 0.8 : 0.25,
-                repeat: isListening ? Infinity : 1,
+                duration: 0.6,
+                repeat: isAnimating ? 2 : 0,
                 ease: "easeInOut",
                 delay: bar.delay,
               }}
@@ -177,9 +232,9 @@ function App() {
         </div>
 
         <div className="text-white text-xl font-semibold select-none">
-          {isListening ? "listening..." : "hello"}
+          {isListening ? "listening…" : "ready"}
         </div>
-      </div>
+      </motion.div>
     </div>
   )
 }

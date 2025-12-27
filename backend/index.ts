@@ -4,52 +4,69 @@ import dotenv from "dotenv"
 
 dotenv.config()
 
-const deepgram = createClient()
+const deepgram = createClient(process.env.DEEPGRAM_API_KEY!)
 
 const wss = new WebSocketServer({ port: 3000 })
 
-wss.on("connection", async (clientSocket, req) => {
-  if (!req.url || req.url !== "/audio") {
+console.log("WebSocket server running on ws://localhost:3000")
+
+wss.on("connection", (clientSocket, req) => {
+  if (req.url !== "/audio") {
     clientSocket.close()
     return
   }
 
-  const dgConnection = deepgram.listen.live({
-     model: "nova-3",
+  console.log("Client connected")
+
+ const dgConnection = deepgram.listen.live({
+  model: "nova-3",
   encoding: "linear16",
   sample_rate: 16000,
   channels: 1,
   interim_results: true,
-  })
+  endpointing: 300,   // 🔥 REQUIRED
+  punctuate: true,
+})
+
+  let dgReady = false
 
   dgConnection.on(LiveTranscriptionEvents.Open, () => {
     console.log("Deepgram connected")
-
-
-  
-  })
-
-    clientSocket.on("message", audioChunk => {
-    if (dgConnection.getReadyState() === WebSocket.OPEN) {
-        //@ts-ignore
-      dgConnection.send(audioChunk )
-    }
+    dgReady = true
   })
 
   dgConnection.on(LiveTranscriptionEvents.Transcript, data => {
+
+    console.log("RAW DG:", JSON.stringify(data))
     const transcript = data.channel?.alternatives?.[0]?.transcript
+     // Only send final results
+  if (transcript && data.is_final) {
+    console.log("DG (final):", transcript)
+    
+    clientSocket.send(JSON.stringify({
+      transcript: transcript,
+      is_final: true
+    }))
+  }
 
-    if (transcript) {
-      console.log(transcript)
-        }
+
+  })
+
+  dgConnection.on(LiveTranscriptionEvents.Error, err => {
+    console.error("Deepgram error:", err)
+  })
+
+  clientSocket.on("message", audioChunk => {
+    if (dgReady && dgConnection.getReadyState() === WebSocket.OPEN) {
+      dgConnection.send(audioChunk)
     }
-  )
-
-   dgConnection.on(LiveTranscriptionEvents.Error, (err) => {
-    console.error(err);
-  });
+  })
 
   clientSocket.on("close", () => {
-    dgConnection.requestClose()
+    console.log("Client disconnected")
+    if (dgConnection.getReadyState() === WebSocket.OPEN) {
+      dgConnection.requestClose() // sends Finalize
+    }
   })
 })
+
