@@ -25,8 +25,8 @@
     "windows": [
       {
         "title": "Subspace Intern",
-        "width": 300,
-        "height": 80,
+        "width": 320,
+        "height": 90,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,
