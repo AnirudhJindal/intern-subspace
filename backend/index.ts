@@ -37,7 +37,6 @@ wss.on("connection", (clientSocket, req) => {
 
   dgConnection.on(LiveTranscriptionEvents.Transcript, data => {
 
-    console.log("RAW DG:", JSON.stringify(data))
     const transcript = data.channel?.alternatives?.[0]?.transcript
      // Only send final results
   if (transcript && data.is_final) {
