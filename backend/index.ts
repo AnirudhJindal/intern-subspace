@@ -24,8 +24,9 @@ wss.on("connection", (clientSocket, req) => {
   sample_rate: 16000,
   channels: 1,
   interim_results: true,
-  endpointing: 300,   // 🔥 REQUIRED
+  endpointing: 300,   //  REQUIRED
   punctuate: true,
+  language:"multi"
 })
 
   let dgReady = false
