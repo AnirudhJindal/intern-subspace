@@ -23,6 +23,7 @@ fn main() {
       let app_handle = app.handle();
       let handle_for_toggle = app_handle.clone();
       let handle_for_listening = app_handle.clone();
+      let handle_for_aimode = app_handle.clone();
 
       #[cfg(target_os = "macos")]
       let toggle_window_shortcut = "Command+Shift+Space";
@@ -75,6 +76,31 @@ fn main() {
             .expect("failed to emit toggle-listening event");
         })
         .expect("failed to register toggle listening shortcut");
+
+        #[cfg(target_os = "macos")]
+      let toggle_ai_shortcut = "Command+K";
+
+      #[cfg(any(target_os = "windows", target_os = "linux"))]
+      let toggle_ai_shortcut = "Ctrl+K";
+
+      app_handle
+        .global_shortcut_manager()
+        .register(toggle_ai_shortcut, move || {
+          let window = handle_for_aimode
+            .get_window("main")
+            .expect("main window not found");
+
+          // Bring app to front (optional UX)
+          window.show().unwrap();
+          
+
+          // Notify frontend to start/stop mic
+          window
+            .emit("toggle-ai", ())
+            .expect("failed to emit toggle-listening event");
+        })
+        .expect("failed to register toggle ai listening shortcut");
+
 
       Ok(())
     })

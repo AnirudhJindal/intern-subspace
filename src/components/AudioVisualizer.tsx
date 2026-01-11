@@ -1,7 +1,8 @@
 import { motion } from "motion/react"
 
 interface AudioVisualizerProps {
-  isAnimating: boolean
+  isAnimating: boolean,
+  isAiMode: boolean
 }
 
 const bars = [
@@ -13,13 +14,15 @@ const bars = [
   { idle: 16, active: 36, delay: 0.5 },
 ]
 
-export function AudioVisualizer({ isAnimating }: AudioVisualizerProps) {
+export function AudioVisualizer({ isAnimating, isAiMode }: AudioVisualizerProps) {
   return (
     <div className="flex items-center gap-1">
       {bars.map((bar, i) => (
         <motion.div
           key={i}
-          className="w-0.75 bg-white rounded-sm"
+          className={`w-0.75 rounded-sm transition-colors duration-300 ${
+            isAiMode ? "bg-purple-500" : "bg-white"
+          }`}
           animate={{
             height: isAnimating ? [bar.idle, bar.active, bar.idle] : bar.idle,
           }}
